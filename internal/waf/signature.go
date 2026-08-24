@@ -263,6 +263,48 @@ func (e *Engine) scanWithDeadline(path, query, body string, headers map[string]s
 	// skipping a signature that should have fired. Folding both runes down
 	// before the AC search closes this without touching regex compilation
 	// or the extraction logic.
+	// REQ SVALINN-WAF-QUERYDECODE-001: query and (for urlencoded bodies)
+	// body are the raw, undecoded values (middleware.go never decodes
+	// either before calling Scan). No signature requiring `\s+` can ever
+	// match the raw form -- Go's HTTP request-line parser rejects a
+	// literal space or control byte in a URI before the app ever sees it,
+	// so real multi-word SQL/RCE syntax only ever arrives '+'-encoded (the
+	// standard application/x-www-form-urlencoded space); the same applies
+	// to a urlencoded POST body. decodedQuery/decodedBody are computed
+	// once, up front, and checked as a fallback only when a signature
+	// misses on the raw form (see the match loop below) -- never
+	// non-empty unless decoding was a true no-op, so a plain "" check is
+	// enough to skip the fallback pass.
+	//
+	// Deliberately NO length cap on the decoded-query pass (Opus judge
+	// review, REQ SVALINN-WAF-QUERYDECODE-001 follow-up): an earlier
+	// version of this fix skipped decoding above 4096 bytes to bound scan
+	// cost, but len(query) is attacker-controlled -- that cap was itself a
+	// trivially attacker-toggled switch to disable detection entirely
+	// (pad the query past 4KB with a harmless param and the real payload
+	// goes unscanned). The existing 100ms signatureScanBudget already
+	// bounds worst-case cost for exactly this reason and degrades
+	// gracefully (fewer signatures reached within budget) rather than
+	// off a cliff (zero decoded scanning). A bounded latency cost beats
+	// an unbounded bypass. Body has no separate cap either, since
+	// middleware.go's maxScannedBodyBytes (8KiB) already bounds it by
+	// rejecting oversized bodies outright (413), not by silently skipping
+	// detection -- that is the sound version of a size guard, and a real
+	// query-side equivalent (414 Too Long, not silent skip) is a separate
+	// REQ, not a gate on this one.
+	decodedQuery := ""
+	if query != "" {
+		if dq := decodeQueryLenient(query); dq != query {
+			decodedQuery = dq
+		}
+	}
+	decodedBody := ""
+	if isFormURLEncoded(targets["header_content-type"]) && body != "" {
+		if db := decodeQueryLenient(body); db != body {
+			decodedBody = db
+		}
+	}
+
 	var bodyLiteralsFound map[string]struct{}
 	if bodyContent, ok := targets["body"]; ok && bodyContent != "" && e.bodyACReady {
 		// Fold scoped to this local copy only -- it must never leak into
@@ -281,6 +323,26 @@ func (e *Engine) scanWithDeadline(path, query, body string, headers map[string]s
 				break
 			}
 			bodyLiteralsFound[e.bodyACPatterns[m.Pattern()]] = struct{}{}
+		}
+		// A required literal that only appears after decoding (e.g. "<script"
+		// from "%3Cscript") must not be silently prefiltered away just
+		// because the RAW body doesn't contain it -- union the decoded
+		// body's literal hits into the same presence set so the match loop
+		// below (which tries decodedBody as a fallback) is never blocked by
+		// the prefilter from reaching a signature it would otherwise match.
+		if decodedBody != "" {
+			decContent := decodedBody
+			if strings.ContainsRune(decContent, '\u017F') || strings.ContainsRune(decContent, '\u212A') {
+				decContent = bodyUnicodeFoldReplacer.Replace(decContent)
+			}
+			it := e.bodyAC.IterOverlapping(decContent)
+			for {
+				m := it.Next()
+				if m == nil {
+					break
+				}
+				bodyLiteralsFound[e.bodyACPatterns[m.Pattern()]] = struct{}{}
+			}
 		}
 	}
 
@@ -306,7 +368,25 @@ func (e *Engine) scanWithDeadline(path, query, body string, headers map[string]s
 			if !exists || content == "" {
 				continue
 			}
-			if matches := sig.regex.FindStringSubmatch(content); matches != nil {
+			matches := sig.regex.FindStringSubmatch(content)
+			// Decoded query/body fallback: only on a raw-form miss (never
+			// both -- would double-count and inflate scores, manufacturing
+			// new false positives), and EVADE-006 (raw control-byte
+			// detection) is deliberately excluded on both targets since
+			// CRLF-001/003/004 and EVADE-005 already flag those bytes on
+			// the raw percent-encoded form for CR/LF/NUL specifically
+			// (declined coverage gain for other C0 bytes, not a regression
+			// -- EVADE-006 could never fire on the raw undecoded form
+			// anyway); re-enabling it here would add score-inflation risk
+			// for no reachable-today detection loss.
+			if matches == nil && sig.ID != "EVADE-006" {
+				if target == "query" && decodedQuery != "" {
+					matches = sig.regex.FindStringSubmatch(decodedQuery)
+				} else if target == "body" && decodedBody != "" {
+					matches = sig.regex.FindStringSubmatch(decodedBody)
+				}
+			}
+			if matches != nil {
 				result.Matches = append(result.Matches, Match{
 					Signature:   sig,
 					Target:      target,
@@ -626,7 +706,19 @@ func (e *Engine) loadDefaultSignatures() {
 	wafBypass := []struct{ id, name, pattern string }{
 		{"WAFB-001", "Unicode normalization", `\\u(?:feff|0000|00a0)`},
 		{"WAFB-004", "HTTP request smuggling", `Content-Length\s*:\s*\d+\s*\r?\n\s*Content-Length`},
-		{"WAFB-005", "Leet speak evasion", `(?:s[e3]l[e3]c[t7]|u[n7][i1][o0]n)`},
+		// REQ SVALINN-WAF-WAFB005-PLAINWORD-001: the old pattern
+		// `s[e3]l[e3]c[t7]|u[n7][i1][o0]n` used character classes to detect
+		// digit-substituted leetspeak, but a character class always matches
+		// its own literal member too -- so plain "select"/"union" matched
+		// this "leet speak evasion" signature despite containing no
+		// obfuscation at all, defeating half its own purpose. Explicitly
+		// enumerated below to every non-literal digit-substitution
+		// combination (7 for "select", 7 for "union" -- 2^3 combinations
+		// each, minus the all-literal spelling), so the plain English words
+		// no longer match while every partial-or-full leetspeak form still
+		// does. (?i) is applied to the whole pattern by addSignature, so
+		// case variants like "S3LECT" still match without listing them here.
+		{"WAFB-005", "Leet speak evasion", `(?:s3lect|sel3ct|selec7|s3l3ct|s3lec7|sel3c7|s3l3c7|u7ion|un1on|uni0n|u71on|u7i0n|un10n|u710n)`},
 		{"WAFB-007", "Null byte extension bypass", `%00.*?\.(php|asp|jsp)`},
 	}
 	for _, s := range wafBypass {
