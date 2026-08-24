@@ -485,7 +485,7 @@ func New(cfg *config.Config, log *logger.Logger) (*Server, error) {
 			for {
 				select {
 				case <-ticker.C:
-					s.countermeasures.Cleanup()
+					s.countermeasuresTick()
 				case <-s.shutdown:
 					return
 				}
@@ -525,6 +525,21 @@ func New(cfg *config.Config, log *logger.Logger) (*Server, error) {
 	log.Info("Advanced features active", "deception", true, "honeypots", len(honeypot.DefaultTraps), "heuristics", true)
 
 	return s, nil
+}
+
+// countermeasuresTick prunes expired countermeasures state and surfaces a
+// warning if the action log is currently failing to persist. SaveError()
+// reflects only the most recent saveLog attempt (not a one-shot event like
+// LoadError()), so this must be polled periodically -- a transient disk
+// failure would otherwise go unnoticed until an operator happens to inspect
+// it manually. REQ SVALINN-COUNTERMEASURES-SAVEERROR-001 follow-up: this was
+// the missing production caller for SaveError(), which previously had zero
+// callers outside its own test file.
+func (s *Server) countermeasuresTick() {
+	s.countermeasures.Cleanup()
+	if err := s.countermeasures.SaveError(); err != nil {
+		s.log.Warn("Countermeasures action log is not persisting -- new blocks/unblocks may be lost on restart", "error", err.Error())
+	}
 }
 
 // ServeHTTP implements http.Handler and intercepts ecosystem endpoints BEFORE middleware

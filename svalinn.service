@@ -1,14 +1,27 @@
 [Unit]
-Description=SVALINN v9.0 Security Gateway
+Description=Tameng Security Gateway
 After=network.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=root
-Group=root
+User=svalinn
+Group=svalinn
 WorkingDirectory=/opt/svalinn
-ExecStart=/opt/svalinn/svalinn --config /opt/svalinn/config.production.yaml
+# Before first start:
+#   useradd --system --no-create-home --shell /usr/sbin/nologin svalinn
+#   mkdir -p /opt/svalinn/data && chown svalinn:svalinn /opt/svalinn/data
+#   Create /opt/svalinn/.env with SVALINN_GOD_KEY/SVALINN_API_KEY/
+#   SVALINN_RESERSE_USER/SVALINN_RESERSE_PASS (configs/svalinn.yaml expands
+#   these via ${VAR}) -- without it the process fails config validation and
+#   crash-loops under Restart=always. Keep it 600 root:root: systemd reads
+#   EnvironmentFile as root before dropping privileges to User=, so it does
+#   NOT need to be svalinn-readable -- unlike the TLS cert note in the
+#   README, do not loosen this file's permissions for the service user.
+EnvironmentFile=/opt/svalinn/.env
+# Binary name matches this repo's Dockerfile/CI build (-o svalinn), not the
+# README's `-o tameng` example -- keep consistent if you rename the build.
+ExecStart=/opt/svalinn/svalinn --config /opt/svalinn/configs/svalinn.yaml
 Restart=always
 RestartSec=5
 StandardOutput=journal
@@ -16,6 +29,28 @@ StandardError=journal
 
 NoNewPrivileges=true
 PrivateTmp=true
+
+# Ports 10000/10443 (configs/svalinn.yaml) are unprivileged; root is not
+# required. If server.http_addr is ever changed to :80/:443, add:
+#   AmbientCapabilities=CAP_NET_BIND_SERVICE
+#   CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+ProtectSystem=strict
+ReadWritePaths=/opt/svalinn/data
+ProtectHome=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
 
 LimitNOFILE=65536
 LimitNPROC=4096

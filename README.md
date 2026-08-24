@@ -42,6 +42,7 @@
 - [Konfigurasi](#konfigurasi)
 - [Endpoint API](#endpoint-api)
 - [Arsitektur](#arsitektur)
+- [Keterbatasan yang Diketahui](#keterbatasan-yang-diketahui)
 - [Testing](#testing)
 - [Keamanan & Pelaporan Kerentanan](#keamanan--pelaporan-kerentanan)
 - [Kerangka Regulasi & Tata Kelola](#kerangka-regulasi--tata-kelola-)
@@ -357,6 +358,20 @@ graph LR
 
 **Data Flow:** Request masuk → middleware pipeline → WAF signature check + ML scoring → actor tracking + behavioral analysis → DDoS detection → deception/honeypot checks → response shaping (encryption, PoW) → SIEM/intel logging → forward to backend (atau block/challenge).
 
+## Keterbatasan yang Diketahui
+
+**Cakupan Layer-7 (bukan L3/L4):** Tameng adalah WAF Layer-7 yang berjalan sebagai reverse proxy — deteksi DDoS-nya (EWMA + eskalasi 3-fase) bekerja pada level pola request HTTP per-IP sumber, bukan traffic level jaringan. Ini tidak menggantikan proteksi volumetrik L3/L4 (SYN flood, UDP flood, amplifikasi DNS), yang membutuhkan CDN atau scrubbing-layer jaringan di depan server (mis. Cloudflare atau provider anti-DDoS jaringan lain). Untuk deployment yang menghadap internet langsung tanpa CDN/LB di depan, pertimbangkan menambahkan layer tersebut.
+
+**Tidak melindungi dari IDOR (Insecure Direct Object Reference):** Tameng tidak dapat mencegah bug otorisasi level objek pada aplikasi Anda. Ini bukan celah implementasi yang bisa ditambal — state kepemilikan objek (mis. "user A boleh akses order #123, user B tidak boleh") hidup di database/sesi aplikasi yang dilindungi, dan sepenuhnya tidak terlihat oleh WAF perimeter mana pun, termasuk Tameng. Dua detektor yang paling relevan di sini:
+- `internal/logic` (Business Logic Abuse, `mode: "detect"` secara default) menghitung volume aksi dan hit ke path sensitif per sesi — bukan mendeteksi akses ke objek milik user lain.
+- Pengecekan sequential-path recon di `internal/preattack` hanya menyumbang skor 0.1 dari ambang 0.7 BLOCK / 0.4 MONITOR, dan mensyaratkan dua path dengan panjang string persis sama yang berbeda satu karakter (mis. `/orders/9` → `/orders/10` tidak akan terdeteksi) — heuristik enumerasi yang lemah, bukan pengganti otorisasi objek.
+
+Otorisasi level objek harus diterapkan di aplikasi Anda sendiri.
+
+**Catatan instalasi (data/ harus writable):** Dockerfile meng-chown `data/` ke user non-root secara otomatis, tapi **hanya berlaku untuk `docker run` tanpa bind mount**. Deployment yang direkomendasikan di README ini pakai `docker-compose up -d`, dan `docker-compose.yml` mem-bind-mount `./data:/app/data` — bind mount menimpa direktori image sepenuhnya dan memakai ownership dari host, sehingga chown Dockerfile tidak berlaku. Kalau repo di-clone sebagai root (mis. `sudo git clone` ke `/opt`), jalankan `mkdir -p data && sudo chown -R 1000:1000 data` (1000 = uid user `svalinn` di image) sebelum `docker-compose up`. Saat deploy dengan systemd, jalankan `mkdir -p /opt/svalinn/data && chown svalinn:svalinn /opt/svalinn/data` sebelum start pertama.
+
+**Keterbacaan sertifikat TLS:** Jika `tls_cert`/`tls_key` diarahkan ke `/etc/letsencrypt/live/...` (biasanya 0700 root-only), service yang berjalan sebagai user non-root `svalinn` tidak akan bisa membacanya. Salin sertifikat ke lokasi yang readable oleh user `svalinn`, atau berikan ACL tambahan.
+
 ## Testing
 
 ```bash
@@ -442,6 +457,7 @@ AGPL-3.0 untuk penggunaan komunitas/open-source. Butuh lisensi dengan syarat ber
 - [Configuration](#configuration)
 - [API Endpoints](#api-endpoints)
 - [Architecture](#architecture)
+- [Known Limitations](#known-limitations)
 - [Testing](#testing-en)
 - [Security & Vulnerability Reporting](#security--vulnerability-reporting)
 - [Regulatory Framework & Governance](#regulatory-framework--governance-)
@@ -747,6 +763,20 @@ graph LR
 ```
 
 **Data Flow:** Incoming request → middleware pipeline → WAF signature check + ML scoring → actor tracking + behavioral analysis → DDoS detection → deception/honeypot checks → response shaping (encryption, PoW) → SIEM/intel logging → forward to backend (or block/challenge).
+
+## Known Limitations
+
+**Layer-7 scope (not L3/L4):** Tameng is a Layer-7 WAF running as a reverse proxy — its DDoS detection (EWMA + 3-phase escalation) operates on per-source-IP HTTP request patterns, not network-level traffic. It does not replace volumetric L3/L4 protection (SYN floods, UDP floods, DNS amplification), which needs a CDN or a network scrubbing layer in front of the server (e.g. Cloudflare or another network-level anti-DDoS provider). For deployments facing the internet directly without a CDN/LB in front, consider adding that layer.
+
+**Does not protect against IDOR (Insecure Direct Object Reference):** Tameng cannot prevent object-level authorization bugs in your application. This isn't a patchable implementation gap — object-ownership state (e.g. "user A may access order #123, user B may not") lives in the protected application's database/session, entirely invisible to any perimeter WAF, including this one. The two most relevant detectors here:
+- `internal/logic` (Business Logic Abuse, `mode: "detect"` by default) counts action volume and sensitive-path hits per session — it does not detect access to another user's objects.
+- The sequential-path recon check in `internal/preattack` contributes only a 0.1 score against a 0.7 BLOCK / 0.4 MONITOR threshold, and requires two paths of exactly equal string length differing by one character (e.g. `/orders/9` → `/orders/10` will not match) — a weak enumeration heuristic, not a substitute for object authorization.
+
+Object-level authorization must be enforced in your own application.
+
+**Install note (writable data/):** The Dockerfile chowns `data/` to the non-root user automatically, but **only for `docker run` without a bind mount**. This README's recommended deployment uses `docker-compose up -d`, and `docker-compose.yml` bind-mounts `./data:/app/data` — a bind mount shadows the image directory entirely and takes host ownership instead, so the Dockerfile's chown doesn't apply. If the repo was cloned as root (e.g. `sudo git clone` into `/opt`), run `mkdir -p data && sudo chown -R 1000:1000 data` (1000 = the `svalinn` user's uid in the image) before `docker-compose up`. When deploying with systemd, run `mkdir -p /opt/svalinn/data && chown svalinn:svalinn /opt/svalinn/data` before the first start.
+
+**TLS cert readability:** If `tls_cert`/`tls_key` point at `/etc/letsencrypt/live/...` (typically 0700 root-only), a service running as the non-root `svalinn` user won't be able to read it. Copy the cert to a location readable by `svalinn`, or grant it an additional ACL.
 
 ## Testing (EN)
 

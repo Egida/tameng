@@ -34,9 +34,6 @@ COPY --from=builder /app/svalinn .
 # Copy config
 COPY configs/ ./configs/
 
-# Create data directory
-RUN mkdir -p /app/data
-
 # Expose ports
 EXPOSE 10000
 EXPOSE 10443
@@ -45,8 +42,11 @@ EXPOSE 10443
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD wget -q --spider http://localhost:10000/health || exit 1
 
-# Run as non-root
+# Run as non-root; create the data dir after adduser so it's owned by the
+# user that will actually write to it (gray-zone state, countermeasures
+# action log, attacker-memory) instead of staying root-owned and unwritable.
 RUN adduser -D -u 1000 svalinn
+RUN mkdir -p /app/data && chown -R svalinn:svalinn /app/data
 USER svalinn
 
 # Start
