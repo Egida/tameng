@@ -6,7 +6,6 @@ require (
 	github.com/dmitryikh/leaves v0.0.0-20230708180554-25d19a787328
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/mux v1.8.1
-	github.com/mattn/go-sqlite3 v1.14.32
 	github.com/oschwald/maxminddb-golang v1.12.0
 	github.com/petar-dambovaliev/aho-corasick v0.0.0-20250424160509-463d218d4745
 	github.com/rs/zerolog v1.31.0

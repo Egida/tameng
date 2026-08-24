@@ -112,10 +112,6 @@ ml:
   timeout: 5s
   fallback_to_rules: true
 
-database:
-  type: "sqlite"
-  path: "data/svalinn.db"
-  in_memory: false
 
 logging:
   # level: debug|info|warn|error (validated at startup, unrecognized values fail config load)

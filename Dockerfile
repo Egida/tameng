@@ -4,9 +4,6 @@
 # Build stage
 FROM golang:1.26.5-alpine AS builder
 
-# Install build dependencies (CGO needed for SQLite)
-RUN apk add --no-cache gcc musl-dev
-
 WORKDIR /app
 
 # Copy go mod files
@@ -16,8 +13,9 @@ RUN go mod download
 # Copy source
 COPY . .
 
-# Build with CGO enabled for SQLite
-ENV CGO_ENABLED=1
+# internal/db (the only cgo/SQLite consumer) was removed as dead code --
+# no package in this tree needs cgo, so a static build is possible.
+ENV CGO_ENABLED=0
 RUN go build -ldflags="-s -w" -o svalinn ./cmd/svalinn
 
 # Runtime stage

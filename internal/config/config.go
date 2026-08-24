@@ -43,7 +43,6 @@ type Config struct {
 	AttackForecast   AttackForecastConfig     `yaml:"attack_forecast"`
 	AttackChain      AttackChainConfig        `yaml:"attack_chain"`
 	Triangulation    TriangulationConfig      `yaml:"triangulation"`
-	Database         DatabaseConfig           `yaml:"database"`
 	Logging          LoggingConfig            `yaml:"logging"`
 	Ecosystem        EcosystemConfig          `yaml:"ecosystem"`
 	Observatory      ObservatoryConfig        `yaml:"observatory"`
@@ -361,13 +360,6 @@ type AttackChainConfig struct {
 // TriangulationConfig holds triangulation engine settings
 type TriangulationConfig struct {
 	Enabled bool `yaml:"enabled"`
-}
-
-// DatabaseConfig holds database settings
-type DatabaseConfig struct {
-	Type     string `yaml:"type"`
-	Path     string `yaml:"path"`
-	InMemory bool   `yaml:"in_memory"`
 }
 
 // LoggingConfig holds logging settings
@@ -1034,14 +1026,6 @@ func setDefaults(cfg *Config) {
 	// Countermeasures defaults
 	if cfg.Countermeasures.ActionLogPath == "" {
 		cfg.Countermeasures.ActionLogPath = "data/defense-actions.json"
-	}
-
-	// Database defaults
-	if cfg.Database.Type == "" {
-		cfg.Database.Type = "sqlite"
-	}
-	if cfg.Database.Path == "" {
-		cfg.Database.Path = "data/svalinn.db"
 	}
 
 	// Logging defaults

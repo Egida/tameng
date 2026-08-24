@@ -196,10 +196,7 @@ graph TD
 
 ### Prasyarat
 
-- **Go 1.26+** (build dari sumber)
-- **Docker & Docker Compose** (Docker deployment) — tidak perlu Go installed
-- **SQLite3** (embedded di binary Go, CGO diperlukan untuk build)
-- **C compiler** — hanya untuk Opsi 2 (build dari sumber), karena `CGO_ENABLED=1`: `gcc`/`build-essential` di Linux, Xcode Command Line Tools di macOS, MinGW-w64/TDM-GCC di Windows. Tidak diperlukan untuk deployment Docker.
+- **Go 1.26+** (build dari sumber) — build pure Go, tidak perlu CGO atau C compiler
 
 ### Opsi 1: Docker (Direkomendasikan)
 
@@ -229,14 +226,14 @@ docker-compose logs -f svalinn
 ### Opsi 2: Dari Sumber
 
 ```bash
-# Prerequisites: Go 1.26+ dengan CGO enabled untuk sqlite3
+# Prerequisites: Go 1.26+ (pure Go build, no CGO needed)
 
 git clone https://github.com/koodoxz/tameng.git
 cd tameng
 cp .env.example .env
 nano .env
 
-CGO_ENABLED=1 go build -o tameng ./cmd/svalinn
+go build -o tameng ./cmd/svalinn
 ./tameng -config configs/svalinn.yaml
 ```
 
@@ -310,7 +307,6 @@ internal/
 ├── collector/      # Threat intelligence collectors
 ├── config/         # YAML config loader with env expansion
 ├── countermeasures/ # Active response mechanisms
-├── db/             # SQLite persistence
 ├── ddos/           # EWMA + 3-phase escalation
 ├── deception/      # Honeypots + canary tokens
 ├── detect/         # Kill chain + C2 detection
@@ -611,10 +607,7 @@ graph TD
 
 ### Prerequisites
 
-- **Go 1.26+** (to build from source)
-- **Docker & Docker Compose** (Docker deployment) — Go not required
-- **SQLite3** (embedded in Go binary; CGO required for building)
-- **C compiler** — only for Option 2 (building from source), since `CGO_ENABLED=1`: `gcc`/`build-essential` on Linux, Xcode Command Line Tools on macOS, MinGW-w64/TDM-GCC on Windows. Not needed for Docker deployment.
+- **Go 1.26+** (to build from source) — pure Go build, no CGO or C compiler needed
 
 ### Option 1: Docker (Recommended)
 
@@ -635,14 +628,14 @@ docker-compose logs -f svalinn
 ### Option 2: From Source
 
 ```bash
-# Prerequisites: Go 1.26+ with CGO enabled for sqlite3
+# Prerequisites: Go 1.26+ (pure Go build, no CGO needed)
 
 git clone https://github.com/koodoxz/tameng.git
 cd tameng
 cp .env.example .env
 nano .env
 
-CGO_ENABLED=1 go build -o tameng ./cmd/svalinn
+go build -o tameng ./cmd/svalinn
 ./tameng -config configs/svalinn.yaml
 ```
 
@@ -716,7 +709,6 @@ internal/
 ├── collector/      # Threat intelligence collectors
 ├── config/         # YAML config loader with env expansion
 ├── countermeasures/ # Active response mechanisms
-├── db/             # SQLite persistence
 ├── ddos/           # EWMA + 3-phase escalation
 ├── deception/      # Honeypots + canary tokens
 ├── detect/         # Kill chain + C2 detection
