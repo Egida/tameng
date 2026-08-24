@@ -307,6 +307,7 @@ internal/
 ├── collector/      # Threat intelligence collectors
 ├── config/         # YAML config loader with env expansion
 ├── countermeasures/ # Active response mechanisms
+├── dataloader/     # JSON-backed import of gray-zone/attacker-memory/forecast/evolved-rules data
 ├── ddos/           # EWMA + 3-phase escalation
 ├── deception/      # Honeypots + canary tokens
 ├── detect/         # Kill chain + C2 detection
@@ -318,16 +319,20 @@ internal/
 ├── heuristics/     # Threat scoring heuristics
 ├── honeypot/       # Dedicated honeypot engine
 ├── intel/          # MITRE ATT&CK + IOC + STIX
+├── literalextract/ # Aho-Corasick literal prefilter, skips regex evaluation when required literals are absent
 ├── logger/         # zerolog structured logging
 ├── logic/          # Business logic abuse detection
 ├── malware/        # Malware behavior analysis
 ├── ml/             # LightGBM ML bridge (native Go)
+├── netutil/        # Dependency-free client-IP/network helpers shared across detection packages
 ├── observatory/    # Top actors cache (Hall of Fame)
 ├── orchestrator/   # Detection orchestration
 ├── payload/        # YARA/Sigma/Snort signatures
 ├── preattack/      # Pre-attack detection (recon/scanning)
 ├── protocol/       # Request smuggling, GraphQL depth, WebSocket
+├── proxy/          # Reverse-proxy forwarding to a protected backend_url
 ├── response/       # Response encryption + PoW challenges
+├── scanbudget/     # Wall-clock scan budget + randomized pattern-evaluation order
 ├── security/       # Security hardening utilities
 ├── semantic/       # Semantic payload analysis
 ├── server/         # HTTP/TLS server + middleware pipeline
@@ -709,6 +714,7 @@ internal/
 ├── collector/      # Threat intelligence collectors
 ├── config/         # YAML config loader with env expansion
 ├── countermeasures/ # Active response mechanisms
+├── dataloader/     # JSON-backed import of gray-zone/attacker-memory/forecast/evolved-rules data
 ├── ddos/           # EWMA + 3-phase escalation
 ├── deception/      # Honeypots + canary tokens
 ├── detect/         # Kill chain + C2 detection
@@ -720,16 +726,20 @@ internal/
 ├── heuristics/     # Threat scoring heuristics
 ├── honeypot/       # Dedicated honeypot engine
 ├── intel/          # MITRE ATT&CK + IOC + STIX
+├── literalextract/ # Aho-Corasick literal prefilter, skips regex evaluation when required literals are absent
 ├── logger/         # zerolog structured logging
 ├── logic/          # Business logic abuse detection
 ├── malware/        # Malware behavior analysis
 ├── ml/             # LightGBM ML bridge (native Go)
+├── netutil/        # Dependency-free client-IP/network helpers shared across detection packages
 ├── observatory/    # Top actors cache (Hall of Fame)
 ├── orchestrator/   # Detection orchestration
 ├── payload/        # YARA/Sigma/Snort signatures
 ├── preattack/      # Pre-attack detection (recon/scanning)
 ├── protocol/       # Request smuggling, GraphQL depth, WebSocket
+├── proxy/          # Reverse-proxy forwarding to a protected backend_url
 ├── response/       # Response encryption + PoW challenges
+├── scanbudget/     # Wall-clock scan budget + randomized pattern-evaluation order
 ├── security/       # Security hardening utilities
 ├── semantic/       # Semantic payload analysis
 ├── server/         # HTTP/TLS server + middleware pipeline
