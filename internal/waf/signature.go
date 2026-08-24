@@ -505,7 +505,6 @@ func (e *Engine) loadDefaultSignatures() {
 	// ═══════════════════════════════════════════════════════════════
 	ssrf := []struct{ id, name, pattern string }{
 		{"SSRF-001", "Localhost IP", `127\.0\.0\.1`},
-		{"SSRF-002", "All interfaces", `0\.0\.0\.0`},
 		{"SSRF-003", "Localhost hostname", `localhost`},
 		{"SSRF-004", "Link-local address", `169\.254\.`},
 		{"SSRF-005", "GCP metadata", `metadata\.google`},
@@ -521,6 +520,28 @@ func (e *Engine) loadDefaultSignatures() {
 	for _, s := range ssrf {
 		e.addSignature(&Signature{ID: s.id, Name: s.name, Category: "ssrf", Severity: SeverityHigh, Pattern: s.pattern, Targets: allTargets, Enabled: true, Score: 0.8, MITRE: "T1090"})
 	}
+	// REQ SVALINN-WAF-SSRF002-UAFP-001: SSRF-002 used to share allTargets
+	// (including user_agent) with a bare `0\.0\.0\.0` pattern. Chrome/Chromium/
+	// Edge's frozen UA version format ("Chrome/120.0.0.0") always contains
+	// that literal substring, so this alone (score 0.8 == a common
+	// block_threshold) 403'd ordinary browsers -- confirmed against 18 days
+	// of shield.svalinn.id production logs (185/4426 blocked requests).
+	// Fixed two ways: (1) the digit/dot boundary guard below stops matching
+	// a trailing ".0.0.0" inside a larger version number like "120.0.0.0"
+	// while still matching a real "0.0.0.0" (RE2 has no lookaround, so this
+	// uses consuming character classes, not `(?<!...)`/`(?!...)` -- those
+	// would fail regexp.Compile and addSignature would silently drop the
+	// signature entirely, turning a false positive into a silent false
+	// negative); (2) user_agent is dropped from this signature's targets,
+	// since a real SSRF payload is attacker-controlled input the server
+	// dereferences (path/query/body), not something that legitimately
+	// appears in a client's own User-Agent string. Only a LEADING boundary
+	// is enforced -- the Chrome FP is caused entirely by what precedes
+	// "0.0.0.0" (the trailing "2" in "120"), so a trailing boundary buys no
+	// FP reduction while losing real SSRF-bypass forms like the wildcard-DNS
+	// technique "0.0.0.0.nip.io" or the trailing-dot FQDN "http://0.0.0.0./"
+	// (Opus judge review, REQ SVALINN-WAF-SSRF002-UAFP-001 follow-up).
+	e.addSignature(&Signature{ID: "SSRF-002", Name: "All interfaces", Category: "ssrf", Severity: SeverityHigh, Pattern: `(?:^|[^0-9.])0\.0\.0\.0`, Targets: []string{"path", "query", "body"}, Enabled: true, Score: 0.8, MITRE: "T1090"})
 
 	// ═══════════════════════════════════════════════════════════════
 	// CRLF/Header Injection (7 patterns)
