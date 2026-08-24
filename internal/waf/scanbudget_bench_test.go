@@ -7,7 +7,7 @@ import (
 
 // REQ SVALINN-SCANBUDGET-001 -- Phase 7 (performance/calibration).
 //
-// Confirms signatureScanBudget (25ms) sits comfortably above real benign
+// Confirms signatureScanBudget (100ms) sits comfortably above real benign
 // cost (so it essentially never trips for normal traffic) while genuinely
 // bounding the adaptive-attacker case that defeats the AC-prefilter
 // (SVALINN-WAFSCAN-ACPREFILTER-001's own finding: ~1337 bytes of literal
