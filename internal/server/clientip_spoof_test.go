@@ -306,12 +306,18 @@ func newWAFTestServer(t *testing.T, whitelistedIPs []string) *Server {
 	}
 }
 
-// sqliProbe is a request the WAF must score as an attack. RawQuery is set
-// verbatim (not percent-encoded) because Engine.Scan matches signatures against
-// the raw query string.
+// sqliProbe is a request the WAF must score as an attack. RawQuery uses '+'
+// in place of the literal spaces a real UNION SELECT payload would need --
+// exactly what a real client's application/x-www-form-urlencoded query
+// string carries on the wire. A literal space is not reachable here:
+// net/http's request-line parser 400s any request URI containing one before
+// the app ever sees it (httptest.NewRequest bypasses that parsing, which is
+// what let this probe use an unreachable payload shape before REQ
+// SVALINN-WAF-QUERYDECODE-001). Engine.Scan matches this via its decoded-
+// query fallback pass, not the raw form.
 func sqliProbe() *http.Request {
 	req := httptest.NewRequest(http.MethodGet, "/search", nil)
-	req.URL.RawQuery = "id=1' UNION SELECT username,password FROM users--"
+	req.URL.RawQuery = "id=1'+UNION+SELECT+username,password+FROM+users--"
 	return req
 }
 
