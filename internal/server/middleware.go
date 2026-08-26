@@ -198,6 +198,45 @@ func (s *Server) bodySizeLimitMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// maxScannedQueryBytes bounds the query string length this app will scan,
+// mirroring maxScannedBodyBytes's cheap-early-rejection posture for the
+// query target. REQ SVALINN-WAF-QUERYLEN-414-001, filed as a follow-up to
+// SVALINN-WAF-QUERYDECODE-001's deliberately-uncapped decoded-query scan
+// pass (a length cap there would itself be an attacker-controlled bypass --
+// signatureScanBudget is what actually bounds worst-case scan cost
+// regardless of this constant). Empirically measured this session (real
+// httptest.NewServer, not httptest.NewRequest, which bypasses wire parsing):
+// net/http's own request-line/header ceiling (http.DefaultMaxHeaderBytes,
+// ~1MiB) doesn't reject an 8KiB query at all -- it reaches the app exactly
+// as sent. So this value is a policy choice for cheap early rejection of
+// pathologically long queries (matching common reverse-proxy defaults --
+// nginx large_client_header_buffers 8k, Apache LimitRequestLine 8190), not
+// something already enforced by the stdlib. ponytail: ceiling is 8KiB,
+// same reasoning as maxScannedBodyBytes; raise only against real traffic
+// data showing legitimate queries this long, not a guess.
+const maxScannedQueryBytes = 1024 * 8
+
+// queryLengthLimitMiddleware rejects oversized query strings with 414
+// before the scanning detectors it exists to protect (wafMiddleware and
+// its signatureScanBudget-bounded decoded-query pass in particular -- see
+// server.go for why it's registered just above wafMiddleware rather than
+// earlier in the chain, unlike bodySizeLimitMiddleware). No
+// reader/MaxBytesReader is needed here -- RawQuery is already a fully-
+// materialized string by the time any middleware runs.
+func (s *Server) queryLengthLimitMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if len(r.URL.RawQuery) > maxScannedQueryBytes {
+			s.jsonResponse(w, http.StatusRequestURITooLong, map[string]interface{}{
+				"error":     "URI_TOO_LONG",
+				"message":   "Query string exceeds the maximum allowed length",
+				"max_bytes": maxScannedQueryBytes,
+			})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func (s *Server) semanticPayloadMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.semanticAnalyzer == nil || !s.cfg.SemanticPayload.Enabled {
