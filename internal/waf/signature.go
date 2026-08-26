@@ -99,44 +99,71 @@ type Engine struct {
 	// loaded yet) -- Scan then always falls back to evaluating every
 	// signature, the original, always-safe behavior.
 	// REQ SVALINN-WAFSCAN-ACPREFILTER-001.
-	bodyAC         ahocorasick.AhoCorasick
-	bodyACPatterns []string
-	bodyACReady    bool
+	//
+	// queryAC/queryACPatterns/queryACReady are the exact same mechanism,
+	// scoped to query-targeting signatures instead -- REQ
+	// SVALINN-WAF-QUERYPREFILTER-001, filed as a follow-up once the query
+	// target existed as a first-class scan target with its own decoded
+	// fallback pass (SVALINN-WAF-QUERYDECODE-001). Built in the same pass
+	// as bodyAC (see rebuildPrefilters) rather than a second locked loop
+	// over e.signatures.
+	bodyAC          ahocorasick.AhoCorasick
+	bodyACPatterns  []string
+	bodyACReady     bool
+	queryAC         ahocorasick.AhoCorasick
+	queryACPatterns []string
+	queryACReady    bool
 }
 
-// rebuildBodyPrefilter recompiles the combined body-literal Aho-Corasick
-// automaton from the current signature set's requiredLiterals. Must be
-// called once after any bulk change to e.signatures (initial load, Reload,
+// rebuildPrefilters recompiles the combined body-literal and query-literal
+// Aho-Corasick automatons from the current signature set's requiredLiterals,
+// in one pass over e.signatures under one lock acquisition. Must be called
+// once after any bulk change to e.signatures (initial load, Reload,
 // LoadEvolvedRules) -- not per-signature, to avoid rebuilding on every
 // single addSignature call.
-func (e *Engine) rebuildBodyPrefilter() {
+func (e *Engine) rebuildPrefilters() {
 	e.lock.Lock()
 	defer e.lock.Unlock()
 
-	litSet := make(map[string]struct{})
+	bodyLitSet := make(map[string]struct{})
+	queryLitSet := make(map[string]struct{})
 	for _, sig := range e.signatures {
 		if len(sig.requiredLiterals) == 0 {
 			continue
 		}
-		isBody := false
+		isBody, isQuery := false, false
 		for _, target := range sig.Targets {
-			if target == "body" {
+			switch target {
+			case "body":
 				isBody = true
-				break
+			case "query":
+				isQuery = true
 			}
 		}
-		if !isBody {
+		if !isBody && !isQuery {
 			continue
 		}
 		for _, lit := range sig.requiredLiterals {
-			litSet[lit] = struct{}{}
+			if isBody {
+				bodyLitSet[lit] = struct{}{}
+			}
+			if isQuery {
+				queryLitSet[lit] = struct{}{}
+			}
 		}
 	}
-	if len(litSet) == 0 {
-		e.bodyACReady = false
-		return
-	}
 
+	e.bodyAC, e.bodyACPatterns, e.bodyACReady = buildPrefilterAC(bodyLitSet)
+	e.queryAC, e.queryACPatterns, e.queryACReady = buildPrefilterAC(queryLitSet)
+}
+
+// buildPrefilterAC builds one Aho-Corasick automaton from a literal set, or
+// reports not-ready if the set is empty -- shared by rebuildPrefilters for
+// both the body and query automatons, which are built identically.
+func buildPrefilterAC(litSet map[string]struct{}) (ahocorasick.AhoCorasick, []string, bool) {
+	if len(litSet) == 0 {
+		return ahocorasick.AhoCorasick{}, nil, false
+	}
 	patterns := make([]string, 0, len(litSet))
 	for lit := range litSet {
 		patterns = append(patterns, lit)
@@ -146,9 +173,31 @@ func (e *Engine) rebuildBodyPrefilter() {
 		MatchOnlyWholeWords:  false,
 		MatchKind:            ahocorasick.StandardMatch,
 	})
-	e.bodyAC = builder.Build(patterns)
-	e.bodyACPatterns = patterns
-	e.bodyACReady = true
+	return builder.Build(patterns), patterns, true
+}
+
+// collectACLiteralHits runs an Aho-Corasick automaton over content (after
+// applying the same ſ/K homoglyph fold the prefilter has always needed --
+// two ASCII letters ('s'/'S', 'k'/'K') whose Unicode simple case-folding
+// orbit, used by the (?i)-compiled regexes, escapes ASCII, while this
+// automaton is ASCII-case-insensitive only) and unions every matched
+// literal into found. content is passed by value, so the fold never leaks
+// into the caller's copy. Shared by the body and query literal-presence
+// prefilters (REQ SVALINN-WAFSCAN-ACPREFILTER-001,
+// SVALINN-WAF-QUERYPREFILTER-001), which apply identical logic to different
+// content.
+func collectACLiteralHits(ac ahocorasick.AhoCorasick, patterns []string, content string, found map[string]struct{}) {
+	if strings.ContainsRune(content, 'ſ') || strings.ContainsRune(content, 'K') {
+		content = bodyUnicodeFoldReplacer.Replace(content)
+	}
+	it := ac.IterOverlapping(content)
+	for {
+		m := it.Next()
+		if m == nil {
+			break
+		}
+		found[patterns[m.Pattern()]] = struct{}{}
+	}
 }
 
 // NewEngine creates a new WAF engine with 200+ signatures
@@ -164,7 +213,7 @@ func NewEngine(signaturesPath string, blockThreshold, logThreshold float64) (*En
 	if err := e.loadSignatures(signaturesPath); err != nil {
 		e.loadDefaultSignatures()
 	}
-	e.rebuildBodyPrefilter()
+	e.rebuildPrefilters()
 
 	return e, nil
 }
@@ -305,44 +354,36 @@ func (e *Engine) scanWithDeadline(path, query, body string, headers map[string]s
 		}
 	}
 
+	// Fold scoped to collectACLiteralHits's local copy only -- it must never
+	// leak into targets["body"]/targets["query"], which are what the real
+	// signature regexes below scan and what Match.MatchedText reports.
+	// Folding the shared map entry would make the WAF report a
+	// homoglyph-normalized string instead of the attacker's actual bytes.
+	//
+	// A required literal that only appears after decoding (e.g. "<script"
+	// from "%3Cscript") must not be silently prefiltered away just because
+	// the RAW content doesn't contain it -- union the decoded content's
+	// literal hits into the same presence set so the match loop below
+	// (which tries the decoded form as a fallback) is never blocked by the
+	// prefilter from reaching a signature it would otherwise match.
 	var bodyLiteralsFound map[string]struct{}
 	if bodyContent, ok := targets["body"]; ok && bodyContent != "" && e.bodyACReady {
-		// Fold scoped to this local copy only -- it must never leak into
-		// targets["body"], which is what the real signature regexes below
-		// scan and what Match.MatchedText reports. Folding the shared map
-		// entry would make the WAF report a homoglyph-normalized string
-		// instead of the attacker's actual bytes.
-		if strings.ContainsRune(bodyContent, '\u017F') || strings.ContainsRune(bodyContent, '\u212A') {
-			bodyContent = bodyUnicodeFoldReplacer.Replace(bodyContent)
-		}
 		bodyLiteralsFound = make(map[string]struct{})
-		it := e.bodyAC.IterOverlapping(bodyContent)
-		for {
-			m := it.Next()
-			if m == nil {
-				break
-			}
-			bodyLiteralsFound[e.bodyACPatterns[m.Pattern()]] = struct{}{}
-		}
-		// A required literal that only appears after decoding (e.g. "<script"
-		// from "%3Cscript") must not be silently prefiltered away just
-		// because the RAW body doesn't contain it -- union the decoded
-		// body's literal hits into the same presence set so the match loop
-		// below (which tries decodedBody as a fallback) is never blocked by
-		// the prefilter from reaching a signature it would otherwise match.
+		collectACLiteralHits(e.bodyAC, e.bodyACPatterns, bodyContent, bodyLiteralsFound)
 		if decodedBody != "" {
-			decContent := decodedBody
-			if strings.ContainsRune(decContent, '\u017F') || strings.ContainsRune(decContent, '\u212A') {
-				decContent = bodyUnicodeFoldReplacer.Replace(decContent)
-			}
-			it := e.bodyAC.IterOverlapping(decContent)
-			for {
-				m := it.Next()
-				if m == nil {
-					break
-				}
-				bodyLiteralsFound[e.bodyACPatterns[m.Pattern()]] = struct{}{}
-			}
+			collectACLiteralHits(e.bodyAC, e.bodyACPatterns, decodedBody, bodyLiteralsFound)
+		}
+	}
+
+	// queryLiteralsFound mirrors bodyLiteralsFound exactly, for the query
+	// target's own Aho-Corasick prefilter -- REQ
+	// SVALINN-WAF-QUERYPREFILTER-001.
+	var queryLiteralsFound map[string]struct{}
+	if queryContent, ok := targets["query"]; ok && queryContent != "" && e.queryACReady {
+		queryLiteralsFound = make(map[string]struct{})
+		collectACLiteralHits(e.queryAC, e.queryACPatterns, queryContent, queryLiteralsFound)
+		if decodedQuery != "" {
+			collectACLiteralHits(e.queryAC, e.queryACPatterns, decodedQuery, queryLiteralsFound)
 		}
 	}
 
@@ -352,10 +393,17 @@ func (e *Engine) scanWithDeadline(path, query, body string, headers map[string]s
 		}
 		sig := e.signatures[si]
 		for _, target := range sig.Targets {
-			if target == "body" && bodyLiteralsFound != nil && len(sig.requiredLiterals) > 0 {
+			var literalsFound map[string]struct{}
+			switch target {
+			case "body":
+				literalsFound = bodyLiteralsFound
+			case "query":
+				literalsFound = queryLiteralsFound
+			}
+			if literalsFound != nil && len(sig.requiredLiterals) > 0 {
 				anyPresent := false
 				for _, lit := range sig.requiredLiterals {
-					if _, ok := bodyLiteralsFound[lit]; ok {
+					if _, ok := literalsFound[lit]; ok {
 						anyPresent = true
 						break
 					}
@@ -848,10 +896,10 @@ func (e *Engine) Reload(path string) error {
 	e.lock.Unlock()
 	if err := e.loadSignatures(path); err != nil {
 		e.loadDefaultSignatures()
-		e.rebuildBodyPrefilter()
+		e.rebuildPrefilters()
 		return err
 	}
-	e.rebuildBodyPrefilter()
+	e.rebuildPrefilters()
 	return nil
 }
 
@@ -917,7 +965,7 @@ func (e *Engine) LoadEvolvedRules(path string) (int, error) {
 			loaded++
 		}
 	}
-	e.rebuildBodyPrefilter()
+	e.rebuildPrefilters()
 
 	return loaded, nil
 }
