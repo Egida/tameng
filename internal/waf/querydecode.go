@@ -25,6 +25,15 @@ import "strings"
 // instead. Single-pass by design: double encoding (e.g. %2527) is already
 // caught on the raw form by NGBYP-009, so recursive decoding buys nothing
 // and opens the double-decode bug class.
+// DecodeQueryLenient is the exported form of decodeQueryLenient, for other
+// internal packages (orchestrator, heuristics) that read r.URL.RawQuery
+// directly and need the same lenient decode fallback the WAF's own scan path
+// uses -- REQ SVALINN-HEURISTICS-RAWQUERY-001. See decodeQueryLenient for
+// full behavior and rationale.
+func DecodeQueryLenient(s string) string {
+	return decodeQueryLenient(s)
+}
+
 func decodeQueryLenient(s string) string {
 	if !strings.ContainsAny(s, "%+") {
 		return s

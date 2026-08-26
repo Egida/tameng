@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+
+	"github.com/koodoxz/tameng/internal/waf"
 )
 
 // Engine performs heuristic analysis
@@ -169,7 +171,14 @@ func (e *Engine) detectPolymorphic(payload string) bool {
 	return hasMultipleEncodings || hasRandomPadding || specialRatio > 0.4
 }
 
-// detectSQLInjection detects SQL injection attempts
+// detectSQLInjection detects SQL injection attempts. payload is always
+// r.URL.RawQuery (Analyze's only caller of this method) -- some patterns
+// here require \s+/\s* (e.g. "or\s+1\s*=\s*1", "exec\s*\("), which a real
+// request's raw query string can never carry a literal space for (net/http
+// rejects a literal space in a URI before the app ever sees it). Checked
+// against the decoded form too as a fallback, same structural gap as
+// SVALINN-WAF-QUERYDECODE-001 -- REQ SVALINN-HEURISTICS-RAWQUERY-001. This
+// only affects a classification label here, never a block decision.
 func (e *Engine) detectSQLInjection(payload string) bool {
 	patterns := []string{
 		`(?i)(union.*select|select.*from|insert.*into|delete.*from|drop.*table)`,
@@ -183,6 +192,15 @@ func (e *Engine) detectSQLInjection(payload string) bool {
 		matched, _ := regexp.MatchString(pattern, payload)
 		if matched {
 			return true
+		}
+	}
+
+	if decoded := waf.DecodeQueryLenient(payload); decoded != payload {
+		for _, pattern := range patterns {
+			matched, _ := regexp.MatchString(pattern, decoded)
+			if matched {
+				return true
+			}
 		}
 	}
 

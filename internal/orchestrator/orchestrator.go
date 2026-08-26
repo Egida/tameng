@@ -454,7 +454,23 @@ func detectTechnique(r *http.Request) string {
 	path := r.URL.Path
 	query := r.URL.RawQuery
 
-	// SQL Injection patterns
+	// SQL Injection patterns. NOTE: this technique label feeds a live
+	// enforcement path (ThreatScore += 25, Exploitation stage, can escalate
+	// through determineCountermeasure to Block/IP-ban), not just a
+	// classification label. REQ SVALINN-HEURISTICS-RAWQUERY-001 originally
+	// added a decoded-query fallback here (mirroring
+	// SVALINN-WAF-QUERYDECODE-001) so "' or "/"-- " -- which need a literal
+	// space only reachable via '+'-decoding -- could be detected. A
+	// Category-C Opus judge review (2026-08-26) found real benign queries
+	// false-positive through it (e.g. "text=hello+--+world" decodes to
+	// "hello -- world", matching "-- "), on a path whose consequence is an
+	// IP ban, unlike the WAF's own SQLI-004 which only blocks the current
+	// request. Every OTHER indicator here ("union", "select", "sleep(",
+	// "waitfor", "/*") already matches on the raw form regardless of
+	// encoding (none require a literal space), so a decoded-query check
+	// adds zero real detection value once the two risky, space-dependent
+	// indicators are excluded -- not implemented for that reason, not an
+	// oversight.
 	if containsAny(path+query, []string{"union", "select", "' or ", "-- ", "/*", "sleep(", "waitfor"}) {
 		return "SQL Injection"
 	}
