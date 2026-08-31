@@ -2431,7 +2431,13 @@ func (s *Server) handleHeimdallReport(w http.ResponseWriter, r *http.Request) {
 		)
 	}
 
-	// Update attacker-memory.json with new threat
+	// Update attacker-memory.json with new threat. Locked for the whole
+	// read-modify-write: this is the file's only writer, but concurrent
+	// HEIMDALL reports would otherwise race each other (last write wins,
+	// losing every other request's update in the same window).
+	s.attackerMemoryLock.Lock()
+	defer s.attackerMemoryLock.Unlock()
+
 	dataFile := "data/attacker-memory.json"
 	memory := make(map[string]interface{})
 	actors := make(map[string]interface{})

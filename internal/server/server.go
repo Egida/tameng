@@ -109,6 +109,12 @@ type Server struct {
 	heimdallDedup     map[string]time.Time
 	heimdallDedupLock sync.RWMutex
 
+	// Guards the read-modify-write of data/attacker-memory.json in
+	// handleHeimdallReport, the file's only writer. Without this, concurrent
+	// reports each read the same on-disk state and the last writer's save
+	// silently clobbers every other request's update.
+	attackerMemoryLock sync.Mutex
+
 	// Stats
 	stats     *Stats
 	statsLock sync.RWMutex
