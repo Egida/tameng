@@ -155,7 +155,34 @@ func NewBackendProxy(backendURL string, log *logger.Logger, normalizeResponseEnc
 		w.WriteHeader(http.StatusBadGateway)
 	}
 
+	rp.ModifyResponse = func(res *http.Response) error {
+		for _, h := range backendIdentityResponseHeaders() {
+			res.Header.Del(h)
+		}
+		return nil
+	}
+
 	return rp, nil
+}
+
+// backendIdentityResponseHeaders lists backend response headers that must
+// never reach the client unfiltered (REQ SVALINN-PROXY-RESPHEADER-SCRUB-001):
+// httputil.ReverseProxy forwards every backend response header verbatim by
+// default, which both fingerprints the backend stack (Server, X-Powered-By)
+// and can hand an attacker a clean oracle distinguishing a blocked request
+// from one SVALINN actually proxied through, if the protected backend sets
+// any header only on responses it itself served (e.g. a backend-specific
+// debug/test header never meant for external eyes).
+//
+// ponytail: this is a denylist, not an allowlist, same shape and same
+// upgrade path as spoofableHeaders() above for request headers -- extend it
+// when a new backend-identifying or oracle-shaped header is found.
+func backendIdentityResponseHeaders() []string {
+	return []string{
+		"X-Test-Backend",
+		"Server",
+		"X-Powered-By",
+	}
 }
 
 // acceptsGzip reports whether the given Accept-Encoding header value

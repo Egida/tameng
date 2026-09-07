@@ -405,6 +405,59 @@ func TestNewBackendProxy_ClientNeverReceivesAnEncodingItDidNotAccept(t *testing.
 	}
 }
 
+// REQ SVALINN-PROXY-RESPHEADER-SCRUB-001
+//
+// httputil.ReverseProxy's default behavior forwards every backend response
+// header to the client verbatim. A red-team assessment found a protected
+// backend's own debug header reaching the client only on non-blocked
+// (proxied-through) responses -- a clean oracle letting an attacker
+// distinguish "SVALINN let this through" from "SVALINN blocked this"
+// without needing any other signal. Server and X-Powered-By are stripped
+// for the same reason (classic backend-fingerprinting headers) and because
+// securityHeadersMiddleware's own "Server: SVALINN" (set earlier in the
+// chain, before this proxy runs) would otherwise end up alongside the
+// backend's real Server value rather than replacing it --
+// httputil.ReverseProxy copies response headers with Header.Add, not Set.
+
+// TestNewBackendProxy_StripsBackendIdentityResponseHeaders proves the fix:
+// none of the denylisted headers reach the client, even though the backend
+// sent them.
+func TestNewBackendProxy_StripsBackendIdentityResponseHeaders(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Test-Backend", "backend-instance-42")
+		w.Header().Set("Server", "nginx/1.18.0")
+		w.Header().Set("X-Powered-By", "PHP/7.4.3")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer backend.Close()
+
+	rp, err := NewBackendProxy(backend.URL, logger.New("test"), false)
+	if err != nil {
+		t.Fatalf("NewBackendProxy: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/app/route", nil)
+	rec := httptest.NewRecorder()
+	rp.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("backend response code: got %d, want 200", rec.Code)
+	}
+	for _, h := range []string{"X-Test-Backend", "Server", "X-Powered-By"} {
+		if v := rec.Header().Get(h); v != "" {
+			t.Errorf("header %s reached the client as %q, want stripped", h, v)
+		}
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Errorf("Content-Type: got %q, want application/json (scrubbing must not remove unrelated headers)", ct)
+	}
+	if rec.Body.String() != `{"status":"ok"}` {
+		t.Errorf("body: got %q, want the backend's original response passed through", rec.Body.String())
+	}
+}
+
 // unreachableBackendAddr reserves a TCP port, closes it immediately, and
 // returns the now-guaranteed-unreachable host:port -- used to exercise the
 // proxy's ErrorHandler path deterministically.
