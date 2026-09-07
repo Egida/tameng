@@ -801,7 +801,10 @@ func (s *Server) setupEcosystemRoutes() {
 func (s *Server) setupRoutes() {
 	// Health & Metrics
 	s.router.HandleFunc("/health", s.handleHealth).Methods("GET")
-	s.router.HandleFunc("/metrics", s.handleMetrics).Methods("GET")
+	// /metrics is API-key gated (REQ SVALINN-METRICS-AUTHGATE-001): it was
+	// previously reachable with a plain unauthenticated GET, leaking request
+	// counts and the active-actor gauge to anyone.
+	s.router.Handle("/metrics", s.apiKeyMiddleware(http.HandlerFunc(s.handleMetrics))).Methods("GET")
 
 	// .well-known endpoints (public)
 	s.router.HandleFunc("/.well-known/security.txt", s.handleSecurityTxt).Methods("GET")

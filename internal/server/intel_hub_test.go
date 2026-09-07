@@ -33,11 +33,15 @@ func newIntelHubTestServer(t *testing.T) *Server {
 	return s
 }
 
-// doProtectedRequest hits /metrics -- a public GET route, like /health, but
-// (unlike /health) NOT exempt from intelHubMiddleware, so it's the right
-// target for tests proving the middleware actually blocks traffic.
+// doProtectedRequest hits /.well-known/security.txt -- a public GET route,
+// like /health, but (unlike /health) NOT exempt from intelHubMiddleware, so
+// it's the right target for tests proving the middleware actually blocks
+// traffic. Switched from /metrics under REQ SVALINN-METRICS-AUTHGATE-001,
+// which made /metrics itself require an API key -- these tests exist to
+// exercise intelHubMiddleware's IOC blocking, not /metrics's own auth, so
+// they need a target that stays unauthenticated and non-exempt.
 func doProtectedRequest(s *Server, remoteAddr, host string) *httptest.ResponseRecorder {
-	return doGetRequest(s, "/metrics", remoteAddr, host)
+	return doGetRequest(s, "/.well-known/security.txt", remoteAddr, host)
 }
 
 func doGetRequest(s *Server, path, remoteAddr, host string) *httptest.ResponseRecorder {
@@ -62,7 +66,7 @@ func TestIntelHubMiddleware_BlocksMatchingIP(t *testing.T) {
 	rec := doProtectedRequest(s, "192.0.2.1:1234", "")
 
 	if rec.Code != http.StatusForbidden {
-		t.Fatalf("GET /metrics from a blocklisted IP: got %d, want 403 (body: %s)", rec.Code, rec.Body.String())
+		t.Fatalf("GET /.well-known/security.txt from a blocklisted IP: got %d, want 403 (body: %s)", rec.Code, rec.Body.String())
 	}
 }
 
@@ -73,7 +77,7 @@ func TestIntelHubMiddleware_BlocksMatchingDomain(t *testing.T) {
 	rec := doProtectedRequest(s, "192.0.2.9:1234", "evil.example.com")
 
 	if rec.Code != http.StatusForbidden {
-		t.Fatalf("GET /metrics with a blocklisted Host: got %d, want 403 (body: %s)", rec.Code, rec.Body.String())
+		t.Fatalf("GET /.well-known/security.txt with a blocklisted Host: got %d, want 403 (body: %s)", rec.Code, rec.Body.String())
 	}
 }
 
@@ -84,7 +88,7 @@ func TestIntelHubMiddleware_PassesThroughNonMatching(t *testing.T) {
 	rec := doProtectedRequest(s, "198.51.100.1:1234", "clean.example.com")
 
 	if rec.Code != http.StatusOK {
-		t.Fatalf("GET /metrics from a clean IP/domain: got %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+		t.Fatalf("GET /.well-known/security.txt from a clean IP/domain: got %d, want 200 (body: %s)", rec.Code, rec.Body.String())
 	}
 }
 
@@ -99,7 +103,7 @@ func TestIntelHubMiddleware_NilHubPassesThrough(t *testing.T) {
 	rec := doProtectedRequest(s, "192.0.2.1:1234", "")
 
 	if rec.Code != http.StatusOK {
-		t.Fatalf("GET /metrics with intel hub disabled: got %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+		t.Fatalf("GET /.well-known/security.txt with intel hub disabled: got %d, want 200 (body: %s)", rec.Code, rec.Body.String())
 	}
 }
 
@@ -266,7 +270,7 @@ func TestIntelHub_BlockViaAPI_ThenMiddlewareBlocksTraffic(t *testing.T) {
 
 	blocked := doProtectedRequest(s, "203.0.113.50:1234", "")
 	if blocked.Code != http.StatusForbidden {
-		t.Fatalf("GET /metrics after blocking via API: got %d, want 403 (body: %s)", blocked.Code, blocked.Body.String())
+		t.Fatalf("GET /.well-known/security.txt after blocking via API: got %d, want 403 (body: %s)", blocked.Code, blocked.Body.String())
 	}
 
 	rec = doGodModePost(s, "/api/v9/intel/unblock", `{"type":"ip","value":"203.0.113.50"}`)
@@ -276,7 +280,7 @@ func TestIntelHub_BlockViaAPI_ThenMiddlewareBlocksTraffic(t *testing.T) {
 
 	allowed := doProtectedRequest(s, "203.0.113.50:1234", "")
 	if allowed.Code != http.StatusOK {
-		t.Fatalf("GET /metrics after unblocking via API: got %d, want 200 (body: %s)", allowed.Code, allowed.Body.String())
+		t.Fatalf("GET /.well-known/security.txt after unblocking via API: got %d, want 200 (body: %s)", allowed.Code, allowed.Body.String())
 	}
 }
 
